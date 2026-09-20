@@ -1,0 +1,2 @@
+-- Baseline migration applied remotely on 2025-12-28 05:34:15 UTC
+-- Recorded in remote supabase_migrations.schema_migrations
