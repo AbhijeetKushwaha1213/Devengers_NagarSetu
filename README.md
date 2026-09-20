@@ -4,6 +4,28 @@ NagarSetu-Civic is a modern, full-stack civic issue reporting and resolution pla
 
 ---
 
+## 🔑 Demo Credentials (Quick Login & Test)
+
+Use these pre-seeded demo accounts to test and evaluate the entire end-to-end civic workflow directly:
+
+| Role / Portal | Login Email | Password | Access & Capabilities |
+|---|---|---|---|
+| 👤 **Citizen** | `citizen@nagarsetu.test` | `NagarTest@123` | Report issues, upvote, comment, track status & submit resolution feedback |
+| 🏛️ **Authority / Admin** | `admin@nagarsetu.test` | `NagarTest@123` | Jurisdiction triage, assign/reassign workers, verify status & view analytics |
+| 👷 **Worker** | `worker@nagarsetu.test` | `NagarTest@123` | View assigned tasks, mark in-progress, upload proof photos & resolve issues |
+
+> [!NOTE]
+> These are pre-seeded demo/test credentials in the test database environment. No production secrets, service-role keys, or private database passwords are exposed.
+
+### ⚡ Recommended 2-Minute Demo Flow
+
+1. **Citizen Portal** (`citizen@nagarsetu.test`): Report an issue with category, photo, and GPS location.
+2. **Authority Portal** (`admin@nagarsetu.test`): View the incoming report in the Authority Dashboard and assign it to `worker@nagarsetu.test`.
+3. **Worker Portal** (`worker@nagarsetu.test`): Accept the task, transition to in-progress, upload photo proof of resolution, and mark resolved.
+4. **Citizen Portal** (`citizen@nagarsetu.test`): Inspect the uploaded resolution evidence photo and submit feedback.
+
+---
+
 ## 🌟 Features
 
 ### 👤 For Citizens
@@ -144,37 +166,6 @@ Authentication is handled using Supabase Auth. Supported authentication methods 
 | **Authority / Administrator** | Manage issues, assign workers, and access administrative functionality |
 
 Database Row Level Security (RLS) policies and role/jurisdiction checks ensure that citizens, workers, and authorities only read and modify data within their authorized scope.
-
----
-
-## 🔑 Demo Credentials
-
-These controlled accounts are provided for demonstration and testing:
-
-| Portal | Email | Password |
-|---|---|---|
-| 👤 Citizen | `citizen@nagarsetu.test` | `NagarTest@123` |
-| 🏛️ Authority / Admin | `admin@nagarsetu.test` | `NagarTest@123` |
-| 👷 Worker | `worker@nagarsetu.test` | `NagarTest@123` |
-
-> [!NOTE]
-> These are pre-seeded demo/test credentials in the test database environment. No production secrets, service-role keys, or private database passwords are exposed.
-
-### Recommended Demo Flow
-
-1. **Login as Citizen** (`citizen@nagarsetu.test`).
-2. **Report an issue** with a category, description, photo, and location.
-3. **Login as Authority/Admin** (`admin@nagarsetu.test`).
-4. **View the newly reported issue** in the Authority Dashboard queue.
-5. **Assign the issue** to the field Worker (`worker@nagarsetu.test`).
-6. **Login as Worker** (`worker@nagarsetu.test`).
-7. **Open the assigned issue** in the Worker Dashboard.
-8. **Update status** to in-progress upon arrival.
-9. **Upload resolution/proof photo** of the completed fix.
-10. **Mark the issue as resolved**.
-11. **Login as Citizen again**.
-12. **View the updated status** and inspect the resolution evidence.
-13. **Submit feedback** rating the resolution.
 
 ---
 
