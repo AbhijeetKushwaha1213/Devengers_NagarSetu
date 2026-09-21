@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Menu, X, User, Bell, MapPin, LogOut } from 'lucide-react';
+import { Menu, X, User, Bell, MapPin, LogOut, Shield } from 'lucide-react';
 import Button from './Button';
 import AuthModal from './AuthModal';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
@@ -39,7 +39,7 @@ const Navbar = () => {
   }, [location]);
 
   const effectiveRole = userProfile?.role || currentUser?.role;
-  const homePath = currentUser ? getDashboardRouteForRole(effectiveRole) : '/';
+  const homePath = currentUser ? '/dashboard' : '/';
   const profilePath = isWorkerOrAuthorityRole(effectiveRole) ? '/official/profile' : '/profile';
 
   const navLinks = [
@@ -87,7 +87,7 @@ const Navbar = () => {
       <div className="container mx-auto px-4 md:px-6">
         <div className="flex items-center justify-between">
           {/* Logo */}
-          <Link to="/" className="flex items-center">
+          <Link to={currentUser ? '/dashboard' : '/'} className="flex items-center">
             <div className="relative h-10 w-10 rounded-full bg-primary flex items-center justify-center mr-2">
               <MapPin className="h-5 w-5 text-white absolute animate-spin-slow" />
               <MapPin className="h-5 w-5 text-white" />
@@ -143,6 +143,14 @@ const Navbar = () => {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
+                  {isWorkerOrAuthorityRole(effectiveRole) && (
+                    <DropdownMenuItem>
+                      <Link to={getDashboardRouteForRole(effectiveRole)} className="flex items-center w-full font-medium text-blue-600">
+                        <Shield className="mr-2 h-4 w-4" />
+                        <span>Authority Dashboard</span>
+                      </Link>
+                    </DropdownMenuItem>
+                  )}
                   <DropdownMenuItem>
                     <Link to={profilePath} className="flex items-center w-full">
                       <User className="mr-2 h-4 w-4" />
@@ -248,6 +256,14 @@ const Navbar = () => {
                     </span>
                   )}
                 </button>
+                {isWorkerOrAuthorityRole(effectiveRole) && (
+                  <Link to={getDashboardRouteForRole(effectiveRole)} className="w-full">
+                    <Button className="w-full justify-center text-blue-600 font-medium" variant="ghost">
+                      <Shield className="h-4 w-4 mr-2" />
+                      Authority Dashboard
+                    </Button>
+                  </Link>
+                )}
                 <Link to={profilePath} className="w-full">
                   <Button className="w-full justify-center" variant="ghost">
                     <User className="h-4 w-4 mr-2" />

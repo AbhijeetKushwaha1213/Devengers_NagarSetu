@@ -68,10 +68,9 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, redirectTo, user
         });
         onClose();
 
-        // Use the authoritative role from the login result for routing,
-        // and window.location.href to survive the AuthProvider loading
-        // re-render that unmounts/remounts BrowserRouter.
-        const targetRoute = redirectTo || getDashboardRouteForRole(result.user.role);
+        // Use citizen dashboard for citizen logins or explicit redirectTo, 
+        // otherwise official role-specific route
+        const targetRoute = redirectTo || (userType === 'citizen' ? '/dashboard' : getDashboardRouteForRole(result.user.role));
         window.location.href = targetRoute;
         return;
       } else {

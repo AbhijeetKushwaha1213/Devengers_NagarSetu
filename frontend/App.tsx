@@ -73,8 +73,7 @@ const OnboardingRoute = ({ children }: { children: React.ReactNode }) => {
   
   // If not a new user, redirect to dashboard
   if (!isNewUser) {
-    const role = currentUser?.role || '';
-    return <Navigate to={getDashboardRouteForRole(role)} replace />;
+    return <Navigate to="/dashboard" replace />;
   }
   
   return <>{children}</>;
@@ -117,10 +116,9 @@ const HomeRoute = () => {
     return <LoadingSpinner fullScreen message="Loading your dashboard..." />;
   }
   
-  // If logged in and not a new user, redirect to role-specific dashboard
+  // If logged in and not a new user, redirect to citizen dashboard
   if (currentUser && !isNewUser) {
-    const role = userProfile?.role || currentUser?.role || 'citizen';
-    return <Navigate to={getDashboardRouteForRole(role)} replace />;
+    return <Navigate to="/dashboard" replace />;
   }
   
   // If logged in but new user, redirect to onboarding

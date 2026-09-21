@@ -290,9 +290,15 @@ export default function Landing() {
       worker: { label: 'Worker', loginPath: '/official/login?portal=worker' },
     };
 
-    if (currentUser && effectiveRole) {
-      // Same portal → go to current dashboard
-      if (isRoleAllowedForPortal(String(effectiveRole), targetPortal)) {
+    if (currentUser) {
+      // Citizen portal is open to all authenticated users
+      if (targetPortal === 'citizen') {
+        navigate('/dashboard');
+        return;
+      }
+
+      // Check if current role matches official portal
+      if (effectiveRole && isRoleAllowedForPortal(String(effectiveRole), targetPortal)) {
         navigate(getDashboardRouteForRole(effectiveRole));
         return;
       }
@@ -349,9 +355,9 @@ export default function Landing() {
   };
 
   const handleAuthSuccess = () => {
-    // After successful authentication, redirect strictly based on authoritative role
+    // After successful authentication, redirect to citizen dashboard
     setAuthModalOpen(false);
-    navigate(getDashboardRouteForRole(effectiveRole));
+    navigate('/dashboard');
     setSelectedUserType(null);
   };
 
