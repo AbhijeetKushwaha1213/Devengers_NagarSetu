@@ -12,6 +12,7 @@ const getApiKey = (): string => {
     if (typeof import.meta !== 'undefined' && import.meta.env) {
       return (
         import.meta.env.VITE_GEMINI_API_KEY ||
+        import.meta.env.GEMINI_API_KEY ||
         import.meta.env.VITE_GOOGLE_VISION_API_KEY ||
         ''
       );
@@ -22,6 +23,7 @@ const getApiKey = (): string => {
   if (typeof process !== 'undefined' && process.env) {
     return (
       process.env.VITE_GEMINI_API_KEY ||
+      process.env.GEMINI_API_KEY ||
       process.env.VITE_GOOGLE_VISION_API_KEY ||
       ''
     );
@@ -61,7 +63,7 @@ export const fileToBase64 = async (file: File | Blob): Promise<string> => {
 };
 
 /**
- * Primary analyzer: Google Gemini Multimodal API (gemini-2.5-flash / gemini-1.5-flash)
+ * Primary analyzer: Google Gemini Multimodal API
  */
 const analyzeWithGemini = async (
   base64Image: string,
@@ -71,22 +73,26 @@ const analyzeWithGemini = async (
   const prompt = `You are NagarSetu AI, an expert civic infrastructure and municipal issue analyzer.
 Analyze the uploaded image of a civic issue reported by a citizen.
 Identify:
-1. The exact civic problem if present (e.g. road damage, garbage dump, littering, water leakage, drainage overflow, broken street light, dead animal carcass, sanitation hazard). If no civic problem is visible, describe the scene.
+1. The exact civic problem if present (e.g. road damage, pothole, garbage dump, littering, water leakage, drainage overflow, broken street light, dead animal carcass, sanitation hazard). If no civic problem is visible, describe the scene.
 2. Suggested category: strictly one of ["cleanliness", "dead_animal", "garbage_dump", "littering", "stagnant_water", "street_light", "water_supply"].
 3. A clear, concise, objective description suitable for municipal complaint submission (2-3 sentences).
-4. Confidence score (number between 0.0 and 1.0).
+4. Confidence score (number between 0.1 and 1.0 representing confidence in this assessment).
 5. Key descriptive labels (array of up to 10 keywords).
 
 Return strictly JSON with keys: description, suggestedCategory, confidence, labels.`;
 
-
-  const models = ['gemini-2.5-flash', 'gemini-1.5-flash'];
+  const models = [
+    'gemini-3.1-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-3-flash-preview',
+    'gemini-3.5-flash',
+  ];
 
   for (const model of models) {
     try {
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
 
       const response = await fetch(url, {
         method: 'POST',
@@ -97,8 +103,8 @@ Return strictly JSON with keys: description, suggestedCategory, confidence, labe
               parts: [
                 { text: prompt },
                 {
-                  inlineData: {
-                    mimeType: mimeType || 'image/jpeg',
+                  inline_data: {
+                    mime_type: mimeType || 'image/jpeg',
                     data: base64Image,
                   },
                 },
@@ -118,7 +124,18 @@ Return strictly JSON with keys: description, suggestedCategory, confidence, labe
         const data = await response.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
         if (text) {
-          const parsed = JSON.parse(text);
+          let cleanText = text.trim();
+          if (cleanText.startsWith('```json')) {
+            cleanText = cleanText.slice(7);
+          } else if (cleanText.startsWith('```')) {
+            cleanText = cleanText.slice(3);
+          }
+          if (cleanText.endsWith('```')) {
+            cleanText = cleanText.slice(0, -3);
+          }
+          cleanText = cleanText.trim();
+          const parsed = JSON.parse(cleanText);
+
           const validCategories: Record<string, string> = {
             cleanliness: 'cleanliness',
             dead_animal: 'dead_animal',
@@ -141,14 +158,16 @@ Return strictly JSON with keys: description, suggestedCategory, confidence, labe
           const rawCat = String(parsed.suggestedCategory || 'cleanliness').toLowerCase().trim();
           const category = validCategories[rawCat] || 'cleanliness';
 
-
           return {
             description: parsed.description || 'Civic issue detected from photo.',
             suggestedCategory: category,
-            confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.9,
+            confidence: typeof parsed.confidence === 'number' && parsed.confidence > 0 ? parsed.confidence : 0.85,
             labels: Array.isArray(parsed.labels) ? parsed.labels.slice(0, 10) : [],
           };
         }
+      } else {
+        const errData = await response.json().catch(() => ({}));
+        console.warn(`[NagarSetu AI] Gemini ${model} returned HTTP ${response.status}:`, errData);
       }
     } catch (err) {
       console.warn(`[NagarSetu AI] Gemini ${model} failed, attempting next model:`, err);
@@ -283,20 +302,27 @@ export const analyzeMultipleImages = async (files: File[]): Promise<VisionAnalys
 export const combineImageAnalyses = (
   analyses: VisionAnalysisResult[]
 ): { description: string; category: string } => {
-  const validAnalyses = analyses.filter(analysis => analysis.confidence > 0.2);
+  // Filter out any empty analyses or failed generic fallbacks
+  const meaningfulAnalyses = analyses.filter(
+    (a) => a && a.description && !a.description.includes('Visual evidence recorded for')
+  );
+  const validAnalyses = meaningfulAnalyses.length > 0 ? meaningfulAnalyses : analyses.filter((a) => a && a.description);
 
   if (validAnalyses.length === 0) {
     return {
       description:
-        'Multiple images uploaded showing civic issue documentation. Please review visual evidence and take remedial action.',
-      category: 'others',
+        'Visual evidence recorded for reported issue. Please review visual evidence and take remedial action.',
+      category: 'cleanliness',
     };
   }
 
-  // If top analysis has high confidence description, use it as primary summary
-  const bestAnalysis = validAnalyses.reduce((best, current) =>
-    current.confidence > best.confidence ? current : best
-  );
+  // Pick the best analysis (prefer higher confidence or longer descriptive content)
+  const bestAnalysis = validAnalyses.reduce((best, current) => {
+    if (current.confidence !== best.confidence) {
+      return current.confidence > best.confidence ? current : best;
+    }
+    return current.description.length > best.description.length ? current : best;
+  });
 
   let combinedDescription = bestAnalysis.description;
 

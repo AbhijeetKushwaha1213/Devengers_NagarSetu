@@ -91,19 +91,29 @@ export default function ReportIssuePage() {
   const handleImagesChange = (files: ImageFile[]) => {
     setImageFiles(files);
     
-    // Extract image files for AI analysis only if Vision API key is set
+    // Extract image files for AI analysis if any Gemini/Vision API key is set
     const imageFilesArray = files.map(f => f.file);
-    if (imageFilesArray.length > 0 && import.meta.env.VITE_GOOGLE_VISION_API_KEY) {
+    const hasAiKey = Boolean(
+      import.meta.env.VITE_GEMINI_API_KEY ||
+      import.meta.env.GEMINI_API_KEY ||
+      import.meta.env.VITE_GOOGLE_VISION_API_KEY
+    );
+    if (imageFilesArray.length > 0 && hasAiKey) {
       analyzePhotosWithAI(imageFilesArray);
     }
   };
 
-  // Analyze photos with Google Vision AI
+  // Analyze photos with Google Gemini / Vision AI
   const analyzePhotosWithAI = async (newFiles: File[]) => {
-    if (!import.meta.env.VITE_GOOGLE_VISION_API_KEY && !import.meta.env.VITE_GEMINI_API_KEY) {
+    const hasAiKey = Boolean(
+      import.meta.env.VITE_GEMINI_API_KEY ||
+      import.meta.env.GEMINI_API_KEY ||
+      import.meta.env.VITE_GOOGLE_VISION_API_KEY
+    );
+    if (!hasAiKey) {
       toast({
         title: "AI Analysis Not Configured",
-        description: "AI API key is not configured. Please enter the description manually.",
+        description: "Gemini AI API key is not configured. Please enter the description manually.",
       });
       return;
     }
@@ -114,10 +124,14 @@ export default function ReportIssuePage() {
       const combined = combineImageAnalyses(analyses);
       
       setAiSuggestion(combined);
+
+      // Auto-populate description and category if currently unpopulated
+      setDescription((prev) => (prev.trim() ? prev : combined.description));
+      setCategory((prev) => (prev ? prev : combined.category));
       
       toast({
         title: "🤖 AI Analysis Complete",
-        description: "Smart description and category suggestions generated!",
+        description: "Smart description and category generated from your photo!",
       });
     } catch (error) {
       console.error('AI analysis failed:', error);

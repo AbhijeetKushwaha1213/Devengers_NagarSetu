@@ -132,9 +132,20 @@ const UserHomepage = () => {
 
     // Reset input
     e.target.value = '';
+
+    // Auto-analyze photos with Gemini AI if key is configured
+    const allFiles = [...photoFiles, ...filesToAdd];
+    const hasAiKey = Boolean(
+      import.meta.env.VITE_GEMINI_API_KEY ||
+      import.meta.env.GEMINI_API_KEY ||
+      import.meta.env.VITE_GOOGLE_VISION_API_KEY
+    );
+    if (allFiles.length > 0 && hasAiKey) {
+      analyzePhotosWithAI(allFiles);
+    }
   };
 
-  // Analyze photos with Google Vision AI
+  // Analyze photos with Google Gemini / Vision AI
   const analyzePhotosWithAI = async (files: File[]) => {
     if (files.length === 0) {
       toast({
@@ -150,6 +161,10 @@ const UserHomepage = () => {
       const result = await analyzeMultipleImagesSimple(files);
       setAiSuggestion(result);
       
+      // Auto-populate description and category if currently empty
+      setDescription((prev) => (prev.trim() ? prev : result.description));
+      setCategory((prev) => (prev ? prev : result.category));
+
       toast({
         title: "🤖 AI Analysis Complete",
         description: "Smart description and category suggestions generated!",

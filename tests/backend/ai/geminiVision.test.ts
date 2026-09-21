@@ -11,16 +11,18 @@ import { analyzeImage, combineImageAnalyses } from '../../../backend/services/ai
 import { analyzeImageSimple } from '../../../backend/services/ai/simpleVisionService';
 
 // Read env for test environment
-const envPath = path.resolve(process.cwd(), '.env.local');
-if (fs.existsSync(envPath)) {
-  const envContent = fs.readFileSync(envPath, 'utf-8');
-  for (const line of envContent.split('\n')) {
-    const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
-    if (match) {
-      let value = match[2] || '';
-      if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-      if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
-      process.env[match[1]] = value;
+for (const f of ['.env.local', '.env']) {
+  const envPath = path.resolve(process.cwd(), f);
+  if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, 'utf-8');
+    for (const line of envContent.split('\n')) {
+      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
+      if (match && !process.env[match[1]]) {
+        let value = match[2] || '';
+        if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
+        if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
+        process.env[match[1]] = value;
+      }
     }
   }
 }
@@ -30,9 +32,9 @@ async function runGeminiVisionTests() {
   console.log('🤖 GEMINI AI IMAGE PROCESSING VERIFICATION TEST');
   console.log('===============================================================\n');
 
-  const apiKey = process.env.VITE_GEMINI_API_KEY || process.env.VITE_GOOGLE_VISION_API_KEY;
+  const apiKey = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || process.env.VITE_GOOGLE_VISION_API_KEY;
   if (!apiKey) {
-    throw new Error('No API key found in process.env or .env.local');
+    throw new Error('No API key found in process.env, .env.local, or .env');
   }
 
   console.log(`Using API Key: ${apiKey.slice(0, 8)}...${apiKey.slice(-6)}`);
