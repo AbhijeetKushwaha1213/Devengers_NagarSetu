@@ -1,10 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MapPin, Navigation, X } from 'lucide-react';
+import { MapPin, Navigation, X, Search, Loader2, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { toast } from '@/hooks/use-toast';
 import { useLocation } from '@/contexts/LocationContext';
+import { 
+  reverseGeocodeCoords, 
+  searchPlaces, 
+  DEFAULT_INDIA_CENTER, 
+  GeocodeResult,
+  waitForMapplsSDK 
+} from '@/services/mapplsService';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 interface LocationPickerProps {
   value: string;
@@ -12,49 +21,8 @@ interface LocationPickerProps {
   placeholder?: string;
 }
 
-const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
-
-// Helper to reverse geocode with Google Maps first, then OpenStreetMap Nominatim
 export const resolveCoordinatesAddress = async (coords: { lat: number; lng: number }): Promise<string> => {
-  // 1. Try Google Maps Geocoding
-  try {
-    if (GOOGLE_MAPS_API_KEY) {
-      const response = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coords.lat},${coords.lng}&key=${GOOGLE_MAPS_API_KEY}`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        if (data.status === 'OK' && data.results && data.results.length > 0) {
-          return data.results[0].formatted_address;
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('Google Maps geocoding failed, falling back to OSM Nominatim:', err);
-  }
-
-  // 2. OpenStreetMap Nominatim fallback
-  try {
-    const osmResponse = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${coords.lat}&lon=${coords.lng}&zoom=18&addressdetails=1`,
-      {
-        headers: {
-          'Accept-Language': 'en',
-        },
-      }
-    );
-    if (osmResponse.ok) {
-      const osmData = await osmResponse.json();
-      if (osmData && osmData.display_name) {
-        return osmData.display_name;
-      }
-    }
-  } catch (err) {
-    console.warn('OSM Nominatim geocoding failed:', err);
-  }
-
-  // 3. Fallback to readable coordinate string
-  return `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
+  return reverseGeocodeCoords(coords);
 };
 
 const LocationPicker: React.FC<LocationPickerProps> = ({ value, onChange, placeholder }) => {
@@ -62,51 +30,53 @@ const LocationPicker: React.FC<LocationPickerProps> = ({ value, onChange, placeh
   const [isLoading, setIsLoading] = useState(false);
   const [selectedCoords, setSelectedCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [mapAddress, setMapAddress] = useState('');
-  const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<google.maps.Map | null>(null);
-  const markerRef = useRef<google.maps.Marker | null>(null);
-  
-  // Use location context
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<GeocodeResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapplsMapRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapplsMarkerRef = useRef<any>(null);
+  const leafletMapRef = useRef<L.Map | null>(null);
+  const leafletMarkerRef = useRef<L.Marker | null>(null);
+
   const { userLocation, isLocationAvailable, requestLocationUpdate } = useLocation();
 
-  // Auto-fill location if available and field is empty
   useEffect(() => {
     if (isLocationAvailable && userLocation && !value) {
       onChange(userLocation.address, { lat: userLocation.lat, lng: userLocation.lng });
     }
   }, [isLocationAvailable, userLocation, value, onChange]);
 
-  // Get current location
   const getCurrentLocation = async () => {
     setIsLoading(true);
-    
     try {
-      // First try to use saved location if available and recent
       if (isLocationAvailable && userLocation) {
-        const isLocationFresh = Date.now() - userLocation.timestamp < 5 * 60 * 1000; // 5 minutes
-        if (isLocationFresh) {
+        const isFresh = Date.now() - userLocation.timestamp < 5 * 60 * 1000;
+        if (isFresh) {
           onChange(userLocation.address, { lat: userLocation.lat, lng: userLocation.lng });
           toast({
             title: "Location Retrieved",
-            description: "Using your saved location.",
+            description: "Using your current detected location.",
           });
           setIsLoading(false);
           return;
         }
       }
 
-      // Request fresh location update
       const location = await requestLocationUpdate();
       if (location) {
         onChange(location.address, { lat: location.lat, lng: location.lng });
         toast({
           title: "Location Updated",
-          description: "Your current location has been detected successfully!",
+          description: "Your location was detected successfully via GPS.",
         });
       } else {
         toast({
           title: "Location Error",
-          description: "Unable to detect your location. Please enter manually or use the map.",
+          description: "Unable to detect GPS location. Please select on the map or enter manually.",
           variant: "destructive",
         });
       }
@@ -114,7 +84,7 @@ const LocationPicker: React.FC<LocationPickerProps> = ({ value, onChange, placeh
       console.error('Location error:', error);
       toast({
         title: "Location Error",
-        description: "Unable to detect your location. Please enter manually or use the map.",
+        description: "Unable to detect location. Please use the map or type manually.",
         variant: "destructive",
       });
     } finally {
@@ -122,290 +92,249 @@ const LocationPicker: React.FC<LocationPickerProps> = ({ value, onChange, placeh
     }
   };
 
-  // Reverse geocode coordinates to address
-  const reverseGeocode = async (coords: { lat: number; lng: number }) => {
+  const handleMapCoordSelect = async (coords: { lat: number; lng: number }) => {
+    setSelectedCoords(coords);
+    setMapAddress('Fetching address from MapMyIndia...');
     try {
-      const address = await resolveCoordinatesAddress(coords);
-      onChange(address, coords);
-    } catch (error) {
-      console.error('Reverse geocoding failed:', error);
-      onChange(`${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`, coords);
-    }
-  };
-
-  // Initialize map
-  const initializeMap = () => {
-    console.log('Initializing map with new layout...');
-    
-    if (!mapRef.current) {
-      console.error('Map container not found');
-      return;
-    }
-
-    if (mapInstanceRef.current) {
-      console.log('Map already exists, cleaning up...');
-      mapInstanceRef.current = null;
-    }
-
-    if (!window.google || !window.google.maps) {
-      console.error('Google Maps API not loaded');
-      return;
-    }
-
-    try {
-      console.log('Creating Google Maps instance...');
-      
-      // Default to India center
-      const defaultCenter = { lat: 20.5937, lng: 78.9629 };
-      
-      const map = new window.google.maps.Map(mapRef.current, {
-        center: defaultCenter,
-        zoom: 6,
-        mapTypeControl: true,
-        streetViewControl: false,
-        fullscreenControl: false,
-        zoomControl: true,
-        gestureHandling: 'cooperative'
-      });
-
-      mapInstanceRef.current = map;
-      console.log('Map created successfully!');
-
-      // Add click listener for map
-      map.addListener('click', (event: google.maps.MapMouseEvent) => {
-        if (!event.latLng) return;
-        
-        const coords = {
-          lat: event.latLng.lat(),
-          lng: event.latLng.lng()
-        };
-        
-        console.log('Map clicked at:', coords);
-        setSelectedCoords(coords);
-        
-        // Remove existing marker
-        if (markerRef.current) {
-          markerRef.current.setMap(null);
-        }
-        
-        // Add new marker with custom icon
-        const marker = new window.google.maps.Marker({
-          position: coords,
-          map: map,
-          title: 'Selected Location',
-          animation: window.google.maps.Animation.DROP
-        });
-        
-        markerRef.current = marker;
-        
-        // Get address for coordinates
-        reverseGeocodeForMap(coords);
-        
-        toast({
-          title: "Location Selected",
-          description: "Scroll down to save this location.",
-        });
-      });
-
-      // Set up search functionality
-      setTimeout(() => {
-        const searchInput = document.getElementById('map-search-input') as HTMLInputElement;
-        if (searchInput && window.google.maps.places) {
-          console.log('Setting up search functionality...');
-          
-          const searchBox = new window.google.maps.places.SearchBox(searchInput);
-
-          // Bias results to map viewport
-          map.addListener('bounds_changed', () => {
-            searchBox.setBounds(map.getBounds() as google.maps.LatLngBounds);
-          });
-
-          // Handle place selection
-          searchBox.addListener('places_changed', () => {
-            const places = searchBox.getPlaces();
-            
-            console.log('Places changed event fired, places:', places);
-            
-            if (!places || places.length === 0) {
-              console.log('No places found');
-              return;
-            }
-
-            const place = places[0];
-            console.log('First place:', place);
-            
-            if (!place.geometry || !place.geometry.location) {
-              console.log('Place has no geometry');
-              toast({
-                title: "Location Error",
-                description: "Could not find coordinates for this location. Try another search.",
-                variant: "destructive",
-              });
-              return;
-            }
-
-            const coords = {
-              lat: place.geometry.location.lat(),
-              lng: place.geometry.location.lng()
-            };
-
-            console.log('Place selected:', place.name, coords);
-            setSelectedCoords(coords);
-
-            // Remove existing marker
-            if (markerRef.current) {
-              markerRef.current.setMap(null);
-            }
-
-            // Add marker for searched place with bounce animation
-            const marker = new window.google.maps.Marker({
-              position: coords,
-              map: map,
-              title: place.name || 'Selected Location',
-              animation: window.google.maps.Animation.BOUNCE
-            });
-
-            // Stop bounce after 2 seconds
-            setTimeout(() => {
-              marker.setAnimation(null);
-            }, 2000);
-
-            markerRef.current = marker;
-
-            // Set address
-            const address = place.formatted_address || place.name || `${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`;
-            setMapAddress(address);
-
-            // Center map on place with proper zoom
-            if (place.geometry.viewport) {
-              // If place has a viewport, fit to it
-              map.fitBounds(place.geometry.viewport);
-            } else {
-              // Otherwise center and zoom
-              map.setCenter(coords);
-              map.setZoom(17); // Closer zoom for better visibility
-            }
-
-            // Clear search input
-            searchInput.value = '';
-
-            toast({
-              title: "Location Found",
-              description: `Selected: ${place.name || address}. Scroll down to save.`,
-            });
-          });
-          
-          console.log('Search functionality set up successfully!');
-        } else {
-          console.warn('Search input not found or Places API not available');
-        }
-      }, 500);
-
-      // Try to center on user location if available
-      if (isLocationAvailable && userLocation) {
-        console.log('Centering map on user location');
-        map.setCenter({ lat: userLocation.lat, lng: userLocation.lng });
-        map.setZoom(15);
-      }
-
-    } catch (error) {
-      console.error('Error creating map:', error);
-      toast({
-        title: "Map Error",
-        description: "Failed to create map. Please refresh and try again.",
-        variant: "destructive",
-      });
-    }
-  };
-
-  // Reverse geocode for map selection
-  const reverseGeocodeForMap = async (coords: { lat: number; lng: number }) => {
-    try {
-      const address = await resolveCoordinatesAddress(coords);
-      setMapAddress(address);
-    } catch (error) {
-      console.error('Reverse geocoding failed:', error);
+      const addr = await resolveCoordinatesAddress(coords);
+      setMapAddress(addr);
+    } catch (err) {
+      console.error('Reverse geocode error:', err);
       setMapAddress(`${coords.lat.toFixed(6)}, ${coords.lng.toFixed(6)}`);
     }
   };
 
-  // Load Google Maps script
+  // Consistently initialize MapMyIndia Map
   useEffect(() => {
-    if (!isMapOpen) return;
-
-    console.log('Map modal opened, checking Google Maps API...');
-
-    if (!GOOGLE_MAPS_API_KEY) {
-      console.error('Google Maps API key not found');
-      toast({
-        title: "Configuration Error",
-        description: "Google Maps API key is missing. Please check your environment variables.",
-        variant: "destructive",
-      });
+    if (!isMapOpen) {
+      if (mapplsMapRef.current && typeof mapplsMapRef.current.remove === 'function') {
+        try { mapplsMapRef.current.remove(); } catch (e) { console.debug(e); }
+        mapplsMapRef.current = null;
+      }
+      if (leafletMapRef.current) {
+        try { leafletMapRef.current.remove(); } catch (e) { console.debug(e); }
+        leafletMapRef.current = null;
+      }
       return;
     }
 
-    if (window.google && window.google.maps && window.google.maps.places) {
-      console.log('Google Maps API already loaded');
-      setTimeout(initializeMap, 100);
-      return;
-    }
+    let isMounted = true;
 
-    console.log('Loading Google Maps API...');
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places&callback=initMap`;
-    script.async = true;
-    script.defer = true;
+    const setupMap = async () => {
+      const containerId = 'mappls-location-picker-canvas';
+      const containerEl = document.getElementById(containerId);
+      if (!containerEl || !isMounted) return;
 
-    // Create global callback
-    (window as unknown as { initMap?: () => void }).initMap = () => {
-      console.log('Google Maps API loaded via callback');
-      setTimeout(initializeMap, 100);
+      // Clean container DOM to prevent duplicate canvas/layers
+      containerEl.innerHTML = '';
+
+      const initialCenter = selectedCoords || 
+        (userLocation ? { lat: userLocation.lat, lng: userLocation.lng } : DEFAULT_INDIA_CENTER);
+
+      // Wait reliably for MapMyIndia SDK
+      const ready = await waitForMapplsSDK(5000);
+
+      if (!isMounted) return;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const win = window as any;
+      const MapplsClass = win.mappls || win.MapmyIndia;
+
+      if (ready && MapplsClass && MapplsClass.Map) {
+        try {
+          console.log('Mounting MapMyIndia Vector Map on #', containerId);
+          containerEl.innerHTML = '';
+
+          const map = new MapplsClass.Map(containerId, {
+            center: [initialCenter.lat, initialCenter.lng],
+            zoom: userLocation || selectedCoords ? 15 : 6,
+            zoomControl: true,
+            hybrid: false,
+            search: false,
+          });
+
+          map.addListener('load', () => {
+            if (!isMounted) return;
+            if (selectedCoords && MapplsClass.Marker) {
+              const marker = new MapplsClass.Marker({
+                map: map,
+                position: { lat: selectedCoords.lat, lng: selectedCoords.lng },
+                draggable: true,
+              });
+              marker.addListener('dragend', () => {
+                const pos = marker.getPosition ? marker.getPosition() : selectedCoords;
+                if (pos) handleMapCoordSelect({ lat: pos.lat, lng: pos.lng });
+              });
+              mapplsMarkerRef.current = marker;
+            }
+          });
+
+          map.addListener('click', (e: { lngLat?: { lat: number; lng: number }; latlng?: { lat: number; lng: number } }) => {
+            const coords = e.lngLat || e.latlng;
+            if (!coords) return;
+
+            if (mapplsMarkerRef.current && typeof mapplsMarkerRef.current.setPosition === 'function') {
+              mapplsMarkerRef.current.setPosition(coords);
+            } else if (MapplsClass.Marker) {
+              const marker = new MapplsClass.Marker({
+                map: map,
+                position: coords,
+                draggable: true,
+              });
+              marker.addListener('dragend', () => {
+                const pos = marker.getPosition ? marker.getPosition() : coords;
+                if (pos) handleMapCoordSelect({ lat: pos.lat, lng: pos.lng });
+              });
+              mapplsMarkerRef.current = marker;
+            }
+
+            handleMapCoordSelect(coords);
+          });
+
+          mapplsMapRef.current = map;
+          return;
+        } catch (err) {
+          console.warn('MapMyIndia native map render exception, falling back:', err);
+        }
+      }
+
+      // Emergency Fallback (Leaflet)
+      try {
+        containerEl.innerHTML = '';
+        const map = L.map(containerEl, {
+          center: [initialCenter.lat, initialCenter.lng],
+          zoom: userLocation || selectedCoords ? 14 : 5,
+          zoomControl: true,
+        });
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; <a href="https://www.mappls.com">MapMyIndia</a> | &copy; OpenStreetMap',
+          maxZoom: 19,
+        }).addTo(map);
+
+        leafletMapRef.current = map;
+
+        if (selectedCoords) {
+          const marker = L.marker([selectedCoords.lat, selectedCoords.lng], { draggable: true }).addTo(map);
+          marker.on('dragend', (e) => {
+            const latlng = e.target.getLatLng();
+            handleMapCoordSelect({ lat: latlng.lat, lng: latlng.lng });
+          });
+          leafletMarkerRef.current = marker;
+        }
+
+        map.on('click', (e: L.LeafletMouseEvent) => {
+          const coords = { lat: e.latlng.lat, lng: e.latlng.lng };
+          if (leafletMarkerRef.current) {
+            leafletMarkerRef.current.setLatLng(e.latlng);
+          } else {
+            const marker = L.marker(e.latlng, { draggable: true }).addTo(map);
+            marker.on('dragend', (dragEvt) => {
+              const pos = dragEvt.target.getLatLng();
+              handleMapCoordSelect({ lat: pos.lat, lng: pos.lng });
+            });
+            leafletMarkerRef.current = marker;
+          }
+          handleMapCoordSelect(coords);
+        });
+
+        map.invalidateSize();
+      } catch (leafErr) {
+        console.error('Leaflet fallback error:', leafErr);
+      }
     };
 
-    script.onerror = (error) => {
-      console.error('Failed to load Google Maps API:', error);
-      toast({
-        title: "Map Loading Error",
-        description: "Failed to load Google Maps. Please check your internet connection.",
-        variant: "destructive",
-      });
-    };
+    const timer = setTimeout(setupMap, 100);
 
-    document.head.appendChild(script);
-
-    // Cleanup
     return () => {
-      const win = window as unknown as { initMap?: () => void };
-      if (win.initMap) {
-        delete win.initMap;
+      isMounted = false;
+      clearTimeout(timer);
+      if (mapplsMapRef.current && typeof mapplsMapRef.current.remove === 'function') {
+        try { mapplsMapRef.current.remove(); } catch (e) { console.debug(e); }
+        mapplsMapRef.current = null;
+      }
+      if (leafletMapRef.current) {
+        try { leafletMapRef.current.remove(); } catch (e) { console.debug(e); }
+        leafletMapRef.current = null;
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMapOpen]);
 
-  // Confirm map selection
+  const handleSearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!searchQuery.trim()) return;
+
+    setIsSearching(true);
+    try {
+      const results = await searchPlaces(searchQuery);
+      setSearchResults(results);
+      setShowDropdown(results.length > 0);
+      if (results.length === 0) {
+        toast({
+          title: "No places found",
+          description: "Try searching with a city or landmark name.",
+        });
+      }
+    } catch (err) {
+      console.error('Search error:', err);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleSelectSearchResult = (result: GeocodeResult) => {
+    const coords = { lat: result.lat, lng: result.lng };
+    setSelectedCoords(coords);
+    setMapAddress(result.formattedAddress);
+    setShowDropdown(false);
+    setSearchQuery(result.formattedAddress);
+
+    // Update MapMyIndia native map if active
+    if (mapplsMapRef.current) {
+      if (typeof mapplsMapRef.current.setCenter === 'function') {
+        mapplsMapRef.current.setCenter([coords.lat, coords.lng]);
+        if (typeof mapplsMapRef.current.setZoom === 'function') {
+          mapplsMapRef.current.setZoom(16);
+        }
+      }
+      if (mapplsMarkerRef.current && typeof mapplsMarkerRef.current.setPosition === 'function') {
+        mapplsMarkerRef.current.setPosition(coords);
+      }
+    }
+
+    // Update Leaflet fallback map if active
+    if (leafletMapRef.current) {
+      leafletMapRef.current.setView([coords.lat, coords.lng], 16);
+      if (leafletMarkerRef.current) {
+        leafletMarkerRef.current.setLatLng([coords.lat, coords.lng]);
+      } else {
+        const marker = L.marker([coords.lat, coords.lng], { draggable: true }).addTo(leafletMapRef.current);
+        marker.on('dragend', (dragEvt) => {
+          const pos = dragEvt.target.getLatLng();
+          handleMapCoordSelect({ lat: pos.lat, lng: pos.lng });
+        });
+        leafletMarkerRef.current = marker;
+      }
+    }
+  };
+
   const confirmMapSelection = () => {
     if (selectedCoords && mapAddress) {
       onChange(mapAddress, selectedCoords);
       toast({
         title: "Location Saved",
-        description: "Selected location has been saved successfully!",
+        description: "Selected location has been updated.",
       });
       setIsMapOpen(false);
-      setSelectedCoords(null);
-      setMapAddress('');
-    } else if (selectedCoords && !mapAddress) {
-      // If we have coordinates but no address yet, use coordinates
+    } else if (selectedCoords) {
       const coordsString = `${selectedCoords.lat.toFixed(6)}, ${selectedCoords.lng.toFixed(6)}`;
       onChange(coordsString, selectedCoords);
       toast({
-        title: "Location Saved",
-        description: "Selected coordinates have been saved successfully!",
+        title: "Coordinates Saved",
+        description: "Location coordinates updated.",
       });
       setIsMapOpen(false);
-      setSelectedCoords(null);
-      setMapAddress('');
     } else {
       toast({
         title: "No Location Selected",
@@ -417,24 +346,23 @@ const LocationPicker: React.FC<LocationPickerProps> = ({ value, onChange, placeh
 
   return (
     <div className="space-y-2">
-      {/* Auto-location indicator */}
       {isLocationAvailable && userLocation && value === userLocation.address && (
         <div className="flex items-center gap-2 text-sm text-green-600 bg-green-50 px-3 py-1 rounded">
           <MapPin className="h-4 w-4" />
-          <span>Using your current location</span>
+          <span>Using your detected location</span>
         </div>
       )}
-      
+
       <div className="flex gap-2">
         <div className="flex-1">
           <Input
             value={value}
             onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder || (isLocationAvailable ? "Auto-detected location or enter manually" : "Enter location or use GPS/Map")}
-            className="pr-20"
+            placeholder={placeholder || (isLocationAvailable ? "Auto-detected location or enter manually" : "Enter location or use MapMyIndia Map")}
+            className="pr-4"
           />
         </div>
-        
+
         <Button
           type="button"
           variant="outline"
@@ -442,186 +370,144 @@ const LocationPicker: React.FC<LocationPickerProps> = ({ value, onChange, placeh
           onClick={getCurrentLocation}
           disabled={isLoading}
           className="flex-shrink-0"
-          title="Get current location"
+          title="Get current GPS location"
         >
           {isLoading ? (
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+            <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
           ) : (
-            <Navigation className="h-4 w-4" />
+            <Navigation className="h-4 w-4 text-blue-600" />
           )}
         </Button>
-        
+
         <Button
           type="button"
           variant="outline"
           size="sm"
           onClick={() => setIsMapOpen(true)}
-          className="flex-shrink-0"
-          title="Select on map"
+          className="flex-shrink-0 text-blue-600"
+          title="Select on MapMyIndia"
         >
           <MapPin className="h-4 w-4" />
         </Button>
       </div>
 
       {/* Map Modal */}
-      <Dialog open={isMapOpen} onOpenChange={(open) => {
-        // Don't close on outside click or escape - only via buttons
-        if (!open) return;
-        setIsMapOpen(open);
-      }}>
+      <Dialog open={isMapOpen} onOpenChange={setIsMapOpen}>
         <DialogContent 
-          className="max-w-5xl w-[95vw] h-[85vh] p-0 overflow-hidden"
-          onInteractOutside={(e) => {
-            // Prevent closing when clicking outside
-            e.preventDefault();
-          }}
-          onEscapeKeyDown={(e) => {
-            // Prevent closing on Escape key
-            if (selectedCoords) {
-              const confirmClose = window.confirm('Close without saving? Your selected location will be lost.');
-              if (!confirmClose) {
-                e.preventDefault();
-              }
-            }
-          }}
+          className="max-w-4xl w-[95vw] h-[85vh] p-0 overflow-hidden flex flex-col bg-white"
         >
-          {/* Header - Fixed at top */}
-          <div className="flex items-center justify-between p-4 border-b bg-white">
+          {/* Header */}
+          <div className="flex items-center justify-between p-4 border-b bg-slate-50">
             <div>
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <MapPin className="h-5 w-5" />
-                Select Issue Location
+              <h2 className="text-lg font-semibold flex items-center gap-2 text-slate-900">
+                <MapPin className="h-5 w-5 text-blue-600" />
+                Select Issue Location on Map
               </h2>
-              <p className="text-sm text-gray-600">
-                Search for a location or click on the map to select
+              <p className="text-xs text-slate-500">
+                Powered by MapMyIndia (Mappls). Search places or tap the map to drop a pin.
               </p>
             </div>
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
-                // Only close the popup, don't clear selection
-                const confirmClose = !selectedCoords || window.confirm('Close without saving? Your selected location will be lost.');
-                if (confirmClose) {
-                  setIsMapOpen(false);
-                  setSelectedCoords(null);
-                  setMapAddress('');
-                }
-              }}
-              title="Close map"
+              onClick={() => setIsMapOpen(false)}
             >
               <X className="h-4 w-4" />
             </Button>
           </div>
 
-          {/* Scrollable Content Area */}
-          <div className="flex flex-col h-full overflow-y-auto">
-            {/* Map Container - Fixed height */}
-            <div className="relative">
-              <div 
-                ref={mapRef} 
-                className="w-full h-[400px] bg-gray-100"
-                style={{ minHeight: '400px' }}
-              />
-              
-              {/* Search Box - Positioned over map */}
-              <div className="absolute top-3 left-1/2 transform -translate-x-1/2 z-10 w-full max-w-md px-4">
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="🔍 Search for a location (e.g., Mumbai, India Gate, etc.)"
-                    className="w-full px-4 py-3 bg-white border-2 border-gray-300 rounded-lg shadow-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    id="map-search-input"
-                    autoComplete="off"
-                  />
-                  <div className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 text-xs">
-                    Press Enter
-                  </div>
-                </div>
+          {/* Search bar over map */}
+          <div className="p-3 bg-white border-b relative z-20">
+            <form onSubmit={handleSearch} className="flex gap-2">
+              <div className="relative flex-1">
+                <Input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="🔍 Search street, locality, landmark, or city in India..."
+                  className="pr-10"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setShowDropdown(false);
+                    }}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
               </div>
-            </div>
-            
-            {/* Selected Location Display */}
-            <div className="p-4 bg-gray-50">
+              <Button type="submit" disabled={isSearching} className="bg-blue-600 hover:bg-blue-700 text-white">
+                {isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4 mr-1" />}
+                Search
+              </Button>
+            </form>
+
+            {/* Suggestions dropdown */}
+            {showDropdown && searchResults.length > 0 && (
+              <div className="absolute left-3 right-3 top-full mt-1 bg-white border rounded-lg shadow-xl max-h-48 overflow-y-auto z-30 divide-y">
+                {searchResults.map((res, index) => (
+                  <button
+                    key={index}
+                    type="button"
+                    onClick={() => handleSelectSearchResult(res)}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 flex items-start gap-2"
+                  >
+                    <MapPin className="h-4 w-4 text-blue-500 mt-0.5 flex-shrink-0" />
+                    <span className="truncate">{res.formattedAddress}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Map canvas */}
+          <div className="relative flex-1 min-h-[300px] w-full">
+            <div id="mappls-location-picker-canvas" className="absolute inset-0 w-full h-full" />
+          </div>
+
+          {/* Selected Location Info & Action Footer */}
+          <div className="p-4 bg-slate-50 border-t flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex-1 text-left w-full">
               {selectedCoords ? (
-                <div className="bg-green-50 border border-green-200 p-4 rounded-lg">
-                  <div className="flex items-center gap-2 mb-2">
-                    <MapPin className="h-5 w-5 text-green-600" />
-                    <p className="font-medium text-green-800">Location Selected!</p>
+                <div>
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-blue-700 uppercase tracking-wide">
+                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                    Selected Location
                   </div>
-                  <p className="text-green-700 mb-1">{mapAddress || 'Getting address...'}</p>
-                  <p className="text-sm text-green-600">
-                    Coordinates: {selectedCoords.lat.toFixed(6)}, {selectedCoords.lng.toFixed(6)}
+                  <p className="text-sm font-medium text-slate-800 line-clamp-1">
+                    {mapAddress || 'Getting address details...'}
                   </p>
-                  <p className="text-sm text-green-500 mt-2">
-                    ✓ Scroll down to save this location
+                  <p className="text-xs text-slate-500">
+                    {selectedCoords.lat.toFixed(6)}, {selectedCoords.lng.toFixed(6)}
                   </p>
                 </div>
               ) : (
-                <div className="bg-white border border-gray-200 p-4 rounded-lg">
-                  <div className="flex items-center gap-2 mb-2">
-                    <MapPin className="h-5 w-5 text-gray-400" />
-                    <p className="font-medium text-gray-600">No Location Selected</p>
-                  </div>
-                  <p className="text-gray-500">
-                    Search for a location above or click anywhere on the map to select it
-                  </p>
-                </div>
+                <p className="text-xs text-slate-500">
+                  Click or drag anywhere on the map to choose the exact coordinates.
+                </p>
               )}
             </div>
 
-            {/* Instructions */}
-            <div className="p-4 bg-blue-50 border-t">
-              <h3 className="font-medium text-blue-800 mb-2">How to select a location:</h3>
-              <ul className="text-sm text-blue-700 space-y-1">
-                <li>• <strong>Search:</strong> Type a location name in the search box above the map</li>
-                <li>• <strong>Click:</strong> Click anywhere on the map to place a marker</li>
-                <li>• <strong>Navigate:</strong> Use zoom controls to find the exact spot</li>
-              </ul>
-            </div>
-            
-            {/* Action Buttons - At bottom with scroll */}
-            <div className="p-4 bg-white border-t sticky bottom-0">
-              <div className="flex justify-between items-center gap-4">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setIsMapOpen(false);
-                    setSelectedCoords(null);
-                    setMapAddress('');
-                  }}
-                  className="px-8"
-                >
-                  Cancel
-                </Button>
-                
-                <div className="flex items-center gap-3">
-                  {selectedCoords && (
-                    <div className="text-sm text-green-600 flex items-center gap-2">
-                      <span className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></span>
-                      Ready to save
-                    </div>
-                  )}
-                  <Button
-                    onClick={confirmMapSelection}
-                    disabled={!selectedCoords}
-                    className={`px-8 ${
-                      selectedCoords 
-                        ? 'bg-green-600 hover:bg-green-700 shadow-lg' 
-                        : 'bg-gray-400 cursor-not-allowed'
-                    }`}
-                  >
-                    {selectedCoords ? (
-                      <>
-                        <MapPin className="h-4 w-4 mr-2" />
-                        Save Location
-                      </>
-                    ) : (
-                      'Select Location First'
-                    )}
-                  </Button>
-                </div>
-              </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsMapOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={confirmMapSelection}
+                disabled={!selectedCoords}
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                <MapPin className="h-4 w-4 mr-1.5" />
+                Confirm Location
+              </Button>
             </div>
           </div>
         </DialogContent>

@@ -12,6 +12,7 @@ const getApiKey = (): string => {
     if (typeof import.meta !== 'undefined' && import.meta.env) {
       return (
         import.meta.env.VITE_GEMINI_API_KEY ||
+        import.meta.env.GEMINI_API_KEY ||
         import.meta.env.VITE_GOOGLE_VISION_API_KEY ||
         ''
       );
@@ -22,6 +23,7 @@ const getApiKey = (): string => {
   if (typeof process !== 'undefined' && process.env) {
     return (
       process.env.VITE_GEMINI_API_KEY ||
+      process.env.GEMINI_API_KEY ||
       process.env.VITE_GOOGLE_VISION_API_KEY ||
       ''
     );

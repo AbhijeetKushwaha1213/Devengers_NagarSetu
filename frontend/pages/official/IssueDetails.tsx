@@ -23,7 +23,7 @@ import { StorageService } from '@backend/services/storage/storageService';
 import { WorkerService } from '@backend/services/workers/workerService';
 import { useAuth } from '@/contexts/SupabaseAuthContext';
 import { getDashboardRouteForRole } from '@/utils/roleRouting';
-import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
+import { waitForMapplsSDK } from '@/services/mapplsService';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
@@ -34,6 +34,83 @@ L.Icon.Default.mergeOptions({
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
+
+// MapMyIndia Issue Details Map Component
+const IssueDetailsMap: React.FC<{ lat: number; lng: number; title: string }> = ({ lat, lng, title }) => {
+  const containerId = 'mappls-issue-details-canvas';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapplsMapRef = useRef<any>(null);
+  const leafletMapRef = useRef<L.Map | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const init = async () => {
+      const el = document.getElementById(containerId);
+      if (!el || !isMounted) return;
+      el.innerHTML = '';
+
+      const ready = await waitForMapplsSDK(4000);
+      if (!isMounted) return;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const win = window as any;
+      const MapplsClass = win.mappls || win.MapmyIndia;
+
+      if (ready && MapplsClass && MapplsClass.Map) {
+        try {
+          el.innerHTML = '';
+          const map = new MapplsClass.Map(containerId, {
+            center: [lat, lng],
+            zoom: 15,
+            zoomControl: true,
+            hybrid: false,
+            search: false,
+          });
+          if (MapplsClass.Marker) {
+            new MapplsClass.Marker({
+              map,
+              position: { lat, lng },
+              title,
+            });
+          }
+          mapplsMapRef.current = map;
+          return;
+        } catch (e) {
+          console.warn('MapMyIndia issue details map error:', e);
+        }
+      }
+
+      // Fallback: Leaflet
+      try {
+        el.innerHTML = '';
+        const map = L.map(el, { center: [lat, lng], zoom: 15, zoomControl: true });
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; <a href="https://www.mappls.com">MapMyIndia</a> | &copy; OpenStreetMap',
+          maxZoom: 19,
+        }).addTo(map);
+        L.marker([lat, lng]).addTo(map).bindPopup(title);
+        leafletMapRef.current = map;
+      } catch (err) {
+        console.error('Leaflet fallback error:', err);
+      }
+    };
+
+    init();
+
+    return () => {
+      isMounted = false;
+      if (mapplsMapRef.current && typeof mapplsMapRef.current.remove === 'function') {
+        try { mapplsMapRef.current.remove(); } catch (e) { console.debug(e); }
+      }
+      if (leafletMapRef.current) {
+        try { leafletMapRef.current.remove(); } catch (e) { console.debug(e); }
+      }
+    };
+  }, [lat, lng, title]);
+
+  return <div id={containerId} className="w-full h-full bg-slate-100" />;
+};
+
 
 interface AdministrativeContext {
   municipalityName: string | null;
@@ -263,7 +340,7 @@ const IssueDetails: React.FC = () => {
     }
   };
 
-  // Google Maps navigation helper: prefers coordinates, falls back cleanly to address
+  // Navigation helper: MapMyIndia (Mappls) directions
   const handleNavigateToLocation = () => {
     const lat = issue?.latitude ?? (issue?.metadata?.latitude as number | undefined);
     const lng = issue?.longitude ?? (issue?.metadata?.longitude as number | undefined);
@@ -271,9 +348,9 @@ const IssueDetails: React.FC = () => {
 
     let url: string;
     if (lat != null && lng != null && !isNaN(Number(lat)) && !isNaN(Number(lng))) {
-      url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+      url = `https://maps.mappls.com/directions?destination=${lat},${lng}`;
     } else if (address && address !== 'Address not specified') {
-      url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`;
+      url = `https://maps.mappls.com/directions?destination=${encodeURIComponent(address)}`;
     } else {
       alert('No location coordinates or address available for this issue.');
       return;
@@ -289,13 +366,14 @@ const IssueDetails: React.FC = () => {
 
     let directionsUrl: string;
     if (lat != null && lng != null && !isNaN(Number(lat)) && !isNaN(Number(lng))) {
-      directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+      directionsUrl = `https://maps.mappls.com/directions?destination=${lat},${lng}`;
     } else if (address && address !== 'Address not specified') {
-      directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(address)}`;
+      directionsUrl = `https://maps.mappls.com/directions?destination=${encodeURIComponent(address)}`;
     } else {
       alert('No location details available to copy');
       return;
     }
+
 
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -543,22 +621,10 @@ const IssueDetails: React.FC = () => {
                   )}
                 </div>
 
-                {/* Interactive Leaflet Map if coordinates are present */}
+                {/* Interactive MapMyIndia Map if coordinates are present */}
                 {hasCoordinates && (
                   <div className="h-64 rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 relative z-0">
-                    <MapContainer
-                      center={[effectiveLat!, effectiveLng!]}
-                      zoom={15}
-                      style={{ height: '100%', width: '100%' }}
-                    >
-                      <TileLayer
-                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                      />
-                      <Marker position={[effectiveLat!, effectiveLng!]}>
-                        <Popup>{issue.title}</Popup>
-                      </Marker>
-                    </MapContainer>
+                    <IssueDetailsMap lat={effectiveLat!} lng={effectiveLng!} title={issue.title} />
                   </div>
                 )}
 

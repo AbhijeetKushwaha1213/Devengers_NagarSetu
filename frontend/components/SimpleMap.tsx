@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Loader2, MapPin, AlertTriangle } from 'lucide-react';
+import { getCategoryMetadata } from '@/constants/categories';
+import { DEFAULT_INDIA_CENTER, waitForMapplsSDK } from '@/services/mapplsService';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 
 interface Issue {
   id: string;
@@ -10,6 +14,8 @@ interface Issue {
   status: string;
   created_at: string;
   priority?: 'low' | 'medium' | 'high' | 'critical';
+  latitude?: number;
+  longitude?: number;
 }
 
 interface SimpleMapProps {
@@ -17,169 +23,27 @@ interface SimpleMapProps {
   onIssueSelect?: (issue: Issue) => void;
 }
 
-const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '';
-
-// Enhanced color mapping for unresolved issues with urgency indicators
 const getUrgencyColor = (priority: string, status: string, daysSinceCreated: number) => {
-  // Resolved issues are green and smaller
-  if (status === 'resolved') return '#10B981'; // Green
-  
-  // For unresolved issues, use yellow/orange spectrum based on urgency
+  if (status === 'resolved') return '#10B981';
   if (status === 'reported' || status === 'in-progress') {
-    // Base colors for unresolved issues
     switch (priority) {
       case 'critical':
-        return daysSinceCreated > 3 ? '#DC2626' : '#EF4444'; // Dark red to red
+        return daysSinceCreated > 3 ? '#DC2626' : '#EF4444';
       case 'high':
-        return daysSinceCreated > 5 ? '#EA580C' : '#F97316'; // Dark orange to orange
+        return daysSinceCreated > 5 ? '#EA580C' : '#F97316';
       case 'medium':
-        return daysSinceCreated > 7 ? '#D97706' : '#F59E0B'; // Dark yellow to yellow
+        return daysSinceCreated > 7 ? '#D97706' : '#F59E0B';
       case 'low':
-        return daysSinceCreated > 14 ? '#F59E0B' : '#FCD34D'; // Yellow to light yellow
+        return daysSinceCreated > 14 ? '#F59E0B' : '#FCD34D';
       default:
-        return '#F59E0B'; // Default yellow for unresolved
+        return '#F59E0B';
     }
   }
-  
-  return '#6B7280'; // Gray for other statuses
+  return '#6B7280';
 };
-
-// Get marker size based on urgency and age
-const getMarkerSize = (priority: string, status: string, daysSinceCreated: number) => {
-  if (status === 'resolved') return 6; // Small for resolved
-  
-  let baseSize = 8;
-  switch (priority) {
-    case 'critical': baseSize = 14; break;
-    case 'high': baseSize = 12; break;
-    case 'medium': baseSize = 10; break;
-    case 'low': baseSize = 8; break;
-  }
-  
-  // Increase size for older unresolved issues
-  if (daysSinceCreated > 7) baseSize += 2;
-  if (daysSinceCreated > 14) baseSize += 2;
-  
-  return Math.min(baseSize, 18); // Cap at 18
-};
-
-// Get urgency level text
-const getUrgencyLevel = (priority: string, daysSinceCreated: number) => {
-  if (daysSinceCreated > 14) return 'OVERDUE';
-  if (daysSinceCreated > 7) return 'URGENT';
-  if (priority === 'critical') return 'CRITICAL';
-  if (priority === 'high') return 'HIGH';
-  return priority.toUpperCase();
-};
-
-// Extract marker creation logic for reuse
-const addMarkersToMap = (map: google.maps.Map, issues: Issue[], onIssueSelect?: (issue: Issue) => void): google.maps.Marker[] => {
-  const markers: google.maps.Marker[] = [];
-  
-  // Filter and add markers for issues (focus on unresolved)
-  const unresolvedIssues = issues.filter(issue => issue.status !== 'resolved');
-  const resolvedIssues = issues.filter(issue => issue.status === 'resolved');
-  
-  // Add unresolved issues first (they get priority)
-  [...unresolvedIssues, ...resolvedIssues].forEach((issue, index) => {
-    // Generate coordinates based on location hash for consistency
-    let hash = 0;
-    for (let i = 0; i < issue.location.length; i++) {
-      const char = issue.location.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    
-    const lat = 40.7128 + ((hash % 2000) / 20000) * (hash > 0 ? 1 : -1);
-    const lng = -74.0060 + (((hash * 7) % 2000) / 20000) * (hash > 0 ? 1 : -1);
-    
-    const priority = issue.priority || calculatePriority(issue.category, issue.created_at);
-    const daysSinceCreated = Math.floor(
-      (Date.now() - new Date(issue.created_at).getTime()) / (1000 * 60 * 60 * 24)
-    );
-    
-    const color = getUrgencyColor(priority, issue.status, daysSinceCreated);
-    const markerSize = getMarkerSize(priority, issue.status, daysSinceCreated);
-    const urgencyLevel = getUrgencyLevel(priority, daysSinceCreated);
-    
-    // Create pulsing effect for critical unresolved issues
-    const shouldPulse = issue.status !== 'resolved' && (priority === 'critical' || daysSinceCreated > 7);
-
-    const marker = new google.maps.Marker({
-      position: { lat, lng },
-      map: map,
-      title: `${urgencyLevel}: ${issue.title}`,
-      icon: {
-        path: google.maps.SymbolPath.CIRCLE,
-        fillColor: color,
-        fillOpacity: issue.status === 'resolved' ? 0.6 : 0.9,
-        strokeColor: issue.status === 'resolved' ? '#ffffff' : '#000000',
-        strokeWeight: issue.status === 'resolved' ? 1 : 2,
-        scale: markerSize
-      },
-      animation: shouldPulse ? google.maps.Animation.BOUNCE : undefined,
-      zIndex: issue.status === 'resolved' ? 1 : (priority === 'critical' ? 1000 : 100)
-    });
-
-    const infoWindow = new google.maps.InfoWindow({
-      content: `
-        <div style="max-width: 280px; padding: 10px;">
-          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-            <div style="width: 12px; height: 12px; border-radius: 50%; background: ${color};"></div>
-            <h3 style="margin: 0; font-size: 15px; font-weight: bold; color: #1f2937;">
-              ${issue.title}
-            </h3>
-          </div>
-          
-          <p style="margin: 0 0 10px 0; font-size: 13px; color: #4b5563; line-height: 1.4;">
-            ${issue.description.length > 100 ? issue.description.substring(0, 100) + '...' : issue.description}
-          </p>
-          
-          <div style="display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap;">
-            <span style="background: ${color}; color: ${issue.status === 'resolved' ? '#000' : '#fff'}; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: bold;">
-              ${urgencyLevel}
-            </span>
-            <span style="background: #e5e7eb; color: #374151; padding: 2px 8px; border-radius: 10px; font-size: 11px;">
-              ${issue.category}
-            </span>
-            <span style="background: ${issue.status === 'resolved' ? '#10b981' : issue.status === 'in-progress' ? '#f59e0b' : '#ef4444'}; color: white; padding: 2px 8px; border-radius: 10px; font-size: 11px;">
-              ${issue.status.replace('-', ' ').toUpperCase()}
-            </span>
-          </div>
-          
-          <div style="font-size: 11px; color: #6b7280; line-height: 1.3;">
-            <div style="margin-bottom: 2px;">📍 ${issue.location}</div>
-            <div style="margin-bottom: 2px;">📅 Reported: ${new Date(issue.created_at).toLocaleDateString()}</div>
-            <div style="color: ${daysSinceCreated > 7 ? '#ef4444' : '#6b7280'}; font-weight: ${daysSinceCreated > 7 ? 'bold' : 'normal'};">
-              ⏱️ ${daysSinceCreated} day${daysSinceCreated !== 1 ? 's' : ''} ago
-              ${daysSinceCreated > 14 ? ' (OVERDUE!)' : daysSinceCreated > 7 ? ' (URGENT)' : ''}
-            </div>
-          </div>
-        </div>
-      `
-    });
-
-    marker.addListener('click', () => {
-      infoWindow.open(map, marker);
-      if (onIssueSelect) {
-        onIssueSelect(issue);
-      }
-    });
-
-    markers.push(marker);
-  });
-  
-  return markers;
-};
-
-import { getCategoryMetadata } from '@/constants/categories';
 
 const calculatePriority = (category: string, createdAt: string): 'low' | 'medium' | 'high' | 'critical' => {
   let basePriority = getCategoryMetadata(category).priority;
-
-
-  
-  // Increase priority based on age
   const daysSinceCreated = Math.floor(
     (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24)
   );
@@ -195,225 +59,354 @@ const calculatePriority = (category: string, createdAt: string): 'low' | 'medium
   return basePriority;
 };
 
+const getUrgencyLevel = (priority: string, daysSinceCreated: number) => {
+  if (daysSinceCreated > 14) return 'OVERDUE';
+  if (daysSinceCreated > 7) return 'URGENT';
+  if (priority === 'critical') return 'CRITICAL';
+  if (priority === 'high') return 'HIGH';
+  return priority.toUpperCase();
+};
+
+const parseLocationToCoords = (issue: Issue): { lat: number; lng: number } => {
+  if (typeof issue.latitude === 'number' && typeof issue.longitude === 'number' && !isNaN(issue.latitude) && !isNaN(issue.longitude)) {
+    return { lat: issue.latitude, lng: issue.longitude };
+  }
+
+  if (issue.location) {
+    const coordMatch = issue.location.match(/(-?\d+\.?\d*),\s*(-?\d+\.?\d*)/);
+    if (coordMatch) {
+      const lat = parseFloat(coordMatch[1]);
+      const lng = parseFloat(coordMatch[2]);
+      if (!isNaN(lat) && !isNaN(lng)) return { lat, lng };
+    }
+
+    let hash = 0;
+    for (let i = 0; i < issue.location.length; i++) {
+      hash = ((hash << 5) - hash) + issue.location.charCodeAt(i);
+      hash |= 0;
+    }
+    const latOffset = ((hash % 1000) / 10000) * (hash > 0 ? 1 : -1);
+    const lngOffset = (((hash * 3) % 1000) / 10000) * (hash > 0 ? 1 : -1);
+    return {
+      lat: DEFAULT_INDIA_CENTER.lat + latOffset,
+      lng: DEFAULT_INDIA_CENTER.lng + lngOffset
+    };
+  }
+
+  return DEFAULT_INDIA_CENTER;
+};
+
+const createSimpleMarkerIcon = (color: string, shouldPulse: boolean, size: number) => {
+  return L.divIcon({
+    className: 'simple-map-pin',
+    html: `
+      <div style="position: relative; width: ${size * 2}px; height: ${size * 2}px; display: flex; align-items: center; justify-content: center;">
+        ${shouldPulse ? `
+          <div style="
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: ${color};
+            opacity: 0.5;
+            animation: ping 1.2s cubic-bezier(0, 0, 0.2, 1) infinite;
+          "></div>
+        ` : ''}
+        <div style="
+          width: ${size}px;
+          height: ${size}px;
+          border-radius: 50%;
+          background: ${color};
+          border: 2px solid #ffffff;
+          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        ">
+          <div style="width: 4px; height: 4px; border-radius: 50%; background: white;"></div>
+        </div>
+      </div>
+    `,
+    iconSize: [size * 2, size * 2],
+    iconAnchor: [size, size],
+    popupAnchor: [0, -size],
+  });
+};
+
 const SimpleMap: React.FC<SimpleMapProps> = ({ issues, onIssueSelect }) => {
-  const mapRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapplsMapRef = useRef<any>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mapplsMarkersRef = useRef<any[]>([]);
+  const leafletMapRef = useRef<L.Map | null>(null);
+  const markersGroupRef = useRef<L.LayerGroup | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdate, setLastUpdate] = useState(new Date());
-  const [mapInstance, setMapInstance] = useState<google.maps.Map | null>(null);
-  const [currentMarkers, setCurrentMarkers] = useState<google.maps.Marker[]>([]);
 
   useEffect(() => {
-    const loadGoogleMaps = () => {
-      // Check if Google Maps is already loaded
-      if (window.google && window.google.maps) {
-        initializeMap();
-        return;
+    let isMounted = true;
+
+    const initMap = async () => {
+      const containerId = 'mappls-simple-map-canvas';
+      const containerEl = document.getElementById(containerId);
+      if (!containerEl || !isMounted) return;
+
+      containerEl.innerHTML = '';
+
+      // Wait reliably for MapMyIndia SDK
+      const ready = await waitForMapplsSDK(5000);
+
+      if (!isMounted) return;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const win = window as any;
+      const MapplsClass = win.mappls || win.MapmyIndia;
+
+      if (ready && MapplsClass && MapplsClass.Map) {
+        try {
+          console.log('Mounting MapMyIndia Vector Map on #', containerId);
+          containerEl.innerHTML = '';
+
+          const map = new MapplsClass.Map(containerId, {
+            center: [DEFAULT_INDIA_CENTER.lat, DEFAULT_INDIA_CENTER.lng],
+            zoom: 11,
+            zoomControl: true,
+            hybrid: false,
+            search: false,
+          });
+
+          mapplsMapRef.current = map;
+          setIsLoading(false);
+          return;
+        } catch (sdkErr) {
+          console.warn('MapMyIndia native SDK init failed for SimpleMap, fallback to Leaflet:', sdkErr);
+        }
       }
 
-      // Create script element
-      const script = document.createElement('script');
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places`;
-      script.async = true;
-      script.defer = true;
-      
-      script.onload = () => {
-        console.log('Google Maps script loaded');
-        initializeMap();
-      };
-      
-      script.onerror = (err) => {
-        console.error('Failed to load Google Maps script:', err);
-        setError('Failed to load Google Maps API');
-        setIsLoading(false);
-      };
-
-      document.head.appendChild(script);
-    };
-
-    const initializeMap = () => {
+      // Fallback: Leaflet
       try {
-        if (!mapRef.current) {
-          throw new Error('Map container not found');
+        containerEl.innerHTML = '';
+        if (leafletMapRef.current) {
+          leafletMapRef.current.remove();
+          leafletMapRef.current = null;
         }
 
-        console.log('Initializing map...');
-        const map = new google.maps.Map(mapRef.current, {
-          center: { lat: 40.7128, lng: -74.0060 },
-          zoom: 12,
-          styles: [
-            {
-              featureType: 'poi',
-              elementType: 'labels',
-              stylers: [{ visibility: 'off' }]
-            }
-          ]
+        const map = L.map(containerEl, {
+          center: [DEFAULT_INDIA_CENTER.lat, DEFAULT_INDIA_CENTER.lng],
+          zoom: 11,
+          zoomControl: true,
         });
 
-        // Add markers using the extracted function
-        const markers = addMarkersToMap(map, issues, onIssueSelect);
-        setCurrentMarkers(markers);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; <a href="https://www.mappls.com">MapMyIndia</a> | &copy; OpenStreetMap',
+          maxZoom: 19,
+        }).addTo(map);
 
+        const markersGroup = L.layerGroup().addTo(map);
+        markersGroupRef.current = markersGroup;
+        leafletMapRef.current = map;
         setIsLoading(false);
-        setMapInstance(map);
-        console.log('Map initialized successfully');
       } catch (err) {
-        console.error('Error initializing map:', err);
+        console.error('Error initializing SimpleMap:', err);
         setError('Failed to initialize map');
         setIsLoading(false);
       }
     };
 
-    loadGoogleMaps();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const timer = setTimeout(initMap, 100);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+      if (mapplsMapRef.current && typeof mapplsMapRef.current.remove === 'function') {
+        try { mapplsMapRef.current.remove(); } catch (e) { console.debug(e); }
+        mapplsMapRef.current = null;
+      }
+      if (leafletMapRef.current) {
+        leafletMapRef.current.remove();
+        leafletMapRef.current = null;
+      }
+    };
   }, []);
 
-  // Update markers when issues change (real-time updates)
+  // Update markers when issues change
   useEffect(() => {
-    if (!mapInstance) return;
+    // 1. MapMyIndia Native Map
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const win = window as any;
+    const MapplsClass = win.mappls || win.MapmyIndia;
 
-    // Clear existing markers
-    currentMarkers.forEach(marker => marker.setMap(null));
-    
-    // Add updated markers
-    const newMarkers = addMarkersToMap(mapInstance, issues, onIssueSelect);
-    setCurrentMarkers(newMarkers);
-    setLastUpdate(new Date());
-    
-    console.log(`Map updated with ${issues.length} issues at ${new Date().toLocaleTimeString()}`);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapInstance, issues, onIssueSelect]);
+    if (mapplsMapRef.current && MapplsClass && MapplsClass.Marker) {
+      mapplsMarkersRef.current.forEach((m) => {
+        if (m && typeof m.remove === 'function') {
+          try { m.remove(); } catch (e) { console.debug(e); }
+        }
+      });
+      mapplsMarkersRef.current = [];
 
-  // Auto-refresh every 30 seconds for real-time updates
-  useEffect(() => {
-    const interval = setInterval(() => {
+      issues.forEach((issue) => {
+        const coords = parseLocationToCoords(issue);
+        try {
+          const marker = new MapplsClass.Marker({
+            map: mapplsMapRef.current,
+            position: { lat: coords.lat, lng: coords.lng },
+            title: issue.title,
+          });
+          marker.addListener('click', () => {
+            if (onIssueSelect) onIssueSelect(issue);
+          });
+          mapplsMarkersRef.current.push(marker);
+        } catch (e) {
+          console.debug(e);
+        }
+      });
       setLastUpdate(new Date());
-      console.log('Real-time map refresh triggered');
-    }, 30000); // 30 seconds
+      return;
+    }
 
-    return () => clearInterval(interval);
-  }, []);
+    // 2. Leaflet Fallback
+    if (!leafletMapRef.current || !markersGroupRef.current) return;
+
+    markersGroupRef.current.clearLayers();
+    if (!issues || issues.length === 0) return;
+
+    const bounds: L.LatLngBounds = L.latLngBounds([]);
+
+    issues.forEach((issue) => {
+      const coords = parseLocationToCoords(issue);
+      const priority = issue.priority || calculatePriority(issue.category, issue.created_at);
+      const daysSinceCreated = Math.floor(
+        (Date.now() - new Date(issue.created_at).getTime()) / (1000 * 60 * 60 * 24)
+      );
+      const color = getUrgencyColor(priority, issue.status, daysSinceCreated);
+      const urgencyLevel = getUrgencyLevel(priority, daysSinceCreated);
+      const shouldPulse = issue.status !== 'resolved' && (priority === 'critical' || daysSinceCreated > 7);
+      const size = issue.status === 'resolved' ? 14 : priority === 'critical' ? 24 : 18;
+
+      const marker = L.marker([coords.lat, coords.lng], {
+        icon: createSimpleMarkerIcon(color, shouldPulse, size),
+        title: `${urgencyLevel}: ${issue.title}`,
+      });
+
+      const popupHtml = `
+        <div style="max-width: 260px; font-family: sans-serif; padding: 4px;">
+          <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
+            <div style="width: 10px; height: 10px; border-radius: 50%; background: ${color};"></div>
+            <h4 style="margin: 0; font-size: 14px; font-weight: 700; color: #1e293b;">
+              ${issue.title}
+            </h4>
+          </div>
+          <p style="margin: 0 0 8px 0; font-size: 12px; color: #475569; line-height: 1.4;">
+            ${issue.description ? (issue.description.length > 90 ? issue.description.substring(0, 90) + '...' : issue.description) : 'No description'}
+          </p>
+          <div style="display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px;">
+            <span style="background: ${color}; color: white; padding: 2px 6px; border-radius: 9999px; font-size: 10px; font-weight: 600;">
+              ${urgencyLevel}
+            </span>
+            <span style="background: #e2e8f0; color: #334155; padding: 2px 6px; border-radius: 9999px; font-size: 10px;">
+              ${issue.category}
+            </span>
+            <span style="background: ${issue.status === 'resolved' ? '#10b981' : issue.status === 'in-progress' ? '#f59e0b' : '#ef4444'}; color: white; padding: 2px 6px; border-radius: 9999px; font-size: 10px;">
+              ${issue.status.replace('-', ' ').toUpperCase()}
+            </span>
+          </div>
+          <div style="font-size: 11px; color: #64748b;">
+            📍 ${issue.location || 'Location'}<br />
+            ⏱️ ${daysSinceCreated} day${daysSinceCreated !== 1 ? 's' : ''} ago
+          </div>
+        </div>
+      `;
+
+      marker.bindPopup(popupHtml);
+
+      marker.on('click', () => {
+        if (onIssueSelect) {
+          onIssueSelect(issue);
+        }
+      });
+
+      if (markersGroupRef.current) {
+        markersGroupRef.current.addLayer(marker);
+      }
+      bounds.extend([coords.lat, coords.lng]);
+    });
+
+    if (issues.length > 0 && bounds.isValid() && leafletMapRef.current) {
+      leafletMapRef.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 });
+    }
+
+    setLastUpdate(new Date());
+  }, [issues, onIssueSelect]);
 
   if (error) {
     return (
-      <div className="h-96 flex items-center justify-center bg-red-50 rounded-lg border-2 border-red-200">
-        <div className="text-center text-red-600">
-          <AlertTriangle className="h-12 w-12 mx-auto mb-4" />
-          <h3 className="text-lg font-semibold mb-2">Map Loading Error</h3>
-          <p className="text-sm">{error}</p>
-          <p className="text-xs mt-2 text-gray-600">
-            Check browser console for details
-          </p>
-        </div>
+      <div className="h-96 flex flex-col items-center justify-center bg-red-50 rounded-lg border border-red-200 p-6">
+        <AlertTriangle className="h-10 w-10 text-red-500 mb-2" />
+        <h3 className="text-base font-semibold text-red-700">Map Loading Error</h3>
+        <p className="text-sm text-red-600 mb-4">{error}</p>
       </div>
     );
   }
 
   return (
-    <div className="relative">
+    <div className="relative rounded-lg overflow-hidden border border-slate-200 shadow-sm">
       {isLoading && (
-        <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center z-10 rounded-lg">
+        <div className="absolute inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-10">
           <div className="text-center">
-            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-blue-600" />
-            <p className="text-sm text-gray-600">Loading map...</p>
+            <Loader2 className="h-7 w-7 animate-spin text-blue-600 mx-auto mb-2" />
+            <p className="text-xs text-slate-600">Loading MapMyIndia view...</p>
           </div>
         </div>
       )}
-      
-      <div ref={mapRef} className="w-full h-96 rounded-lg" />
-      
-      {/* Enhanced Legend */}
-      <div className="absolute bottom-4 left-4 bg-white p-3 rounded-lg shadow-lg border max-w-xs">
-        <h4 className="text-sm font-semibold mb-2">Issue Urgency Tracker</h4>
-        <div className="space-y-1 text-xs">
-          <div className="flex items-center gap-2">
-            <div className="w-4 h-4 rounded-full bg-red-600 animate-pulse"></div>
-            <span className="font-medium">Critical/Overdue (14+ days)</span>
+
+      <div id="mappls-simple-map-canvas" className="w-full h-96 bg-slate-100" />
+
+      {/* Urgency Legend */}
+      <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur-md p-2.5 rounded-lg shadow-md border border-slate-200 z-[1000] text-xs">
+        <h4 className="font-semibold text-slate-800 mb-1 text-[11px]">Issue Urgency</h4>
+        <div className="space-y-1 text-[11px]">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-red-600 animate-pulse"></div>
+            <span>Critical / Overdue (14+ d)</span>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-orange-600"></div>
-            <span>High Priority/Urgent (7+ days)</span>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-orange-500"></div>
+            <span>High Priority / Urgent (7+ d)</span>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-amber-500"></div>
             <span>Medium Priority</span>
           </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-yellow-300"></div>
-            <span>Low Priority</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-green-500"></div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500"></div>
             <span>Resolved</span>
           </div>
         </div>
-        <div className="mt-2 pt-2 border-t border-gray-200 text-xs text-gray-600">
-          <div>🔴 Bouncing = Critical/Overdue</div>
-          <div>📍 Larger = More urgent</div>
-        </div>
       </div>
 
-      {/* Real-time Status Panel */}
-      <div className="absolute top-4 right-4 bg-white p-3 rounded-lg shadow-lg border min-w-48">
-        <div className="text-sm space-y-2">
-          <div className="flex items-center gap-2 font-semibold">
-            <MapPin className="h-4 w-4 text-blue-600" />
-            <span>Live Issue Tracker</span>
+      {/* Live Tracker Count Panel */}
+      <div className="absolute top-3 right-3 bg-white/95 backdrop-blur-md p-2.5 rounded-lg shadow-md border border-slate-200 z-[1000] text-xs min-w-40">
+        <div className="flex items-center gap-1.5 font-semibold text-slate-800 mb-1.5">
+          <MapPin className="h-3.5 w-3.5 text-blue-600" />
+          <span>Live Issue Tracker</span>
+        </div>
+        <div className="space-y-1 text-[11px]">
+          <div className="flex justify-between">
+            <span className="text-slate-600">Total:</span>
+            <span className="font-semibold text-slate-800">{issues.length}</span>
           </div>
-          
-          <div className="space-y-1 text-xs">
-            <div className="flex justify-between">
-              <span className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                Critical/Overdue:
-              </span>
-              <span className="font-bold text-red-600">
-                {issues.filter(i => {
-                  const days = Math.floor((Date.now() - new Date(i.created_at).getTime()) / (1000 * 60 * 60 * 24));
-                  const priority = i.priority || calculatePriority(i.category, i.created_at);
-                  return i.status !== 'resolved' && (priority === 'critical' || days > 14);
-                }).length}
-              </span>
-            </div>
-            
-            <div className="flex justify-between">
-              <span className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-orange-500"></div>
-                High/Urgent:
-              </span>
-              <span className="font-bold text-orange-600">
-                {issues.filter(i => {
-                  const days = Math.floor((Date.now() - new Date(i.created_at).getTime()) / (1000 * 60 * 60 * 24));
-                  const priority = i.priority || calculatePriority(i.category, i.created_at);
-                  return i.status !== 'resolved' && priority === 'high' && days <= 14;
-                }).length}
-              </span>
-            </div>
-            
-            <div className="flex justify-between">
-              <span className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
-                Unresolved:
-              </span>
-              <span className="font-bold text-yellow-600">
-                {issues.filter(i => i.status !== 'resolved').length}
-              </span>
-            </div>
-            
-            <div className="flex justify-between">
-              <span className="flex items-center gap-1">
-                <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                Resolved:
-              </span>
-              <span className="font-bold text-green-600">
-                {issues.filter(i => i.status === 'resolved').length}
-              </span>
-            </div>
+          <div className="flex justify-between">
+            <span className="text-amber-600">Pending:</span>
+            <span className="font-semibold text-amber-600">{issues.filter(i => i.status !== 'resolved').length}</span>
           </div>
-          
-          <div className="pt-1 border-t border-gray-200 text-xs text-gray-500">
-            Last updated: {lastUpdate.toLocaleTimeString()}
+          <div className="flex justify-between">
+            <span className="text-emerald-600">Resolved:</span>
+            <span className="font-semibold text-emerald-600">{issues.filter(i => i.status === 'resolved').length}</span>
           </div>
+        </div>
+        <div className="pt-1 mt-1 border-t border-slate-200 text-[10px] text-slate-400">
+          Updated: {lastUpdate.toLocaleTimeString()}
         </div>
       </div>
     </div>

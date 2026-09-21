@@ -21,7 +21,8 @@ const NetworkDebugPage: React.FC = () => {
       info.envVars = {
         VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL || 'MISSING',
         VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY ? 'PRESENT' : 'MISSING',
-        VITE_GOOGLE_MAPS_API_KEY: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'MISSING',
+        VITE_MAPPLS_KEY: import.meta.env.VITE_MAPPLS_KEY || import.meta.env.VITE_MAPMYINDIA_MAP_KEY ? 'PRESENT' : 'MISSING',
+        VITE_GEMINI_API_KEY: import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.GEMINI_API_KEY ? 'PRESENT' : 'MISSING',
         VITE_AUTHORITY_ACCESS_CODE: import.meta.env.VITE_AUTHORITY_ACCESS_CODE ? 'PRESENT' : 'MISSING',
         MODE: import.meta.env.MODE,
         DEV: import.meta.env.DEV,

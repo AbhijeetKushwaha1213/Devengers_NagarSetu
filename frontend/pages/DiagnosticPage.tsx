@@ -1,12 +1,16 @@
 import React from 'react';
+import { getMapplsKey } from '@/services/mapplsService';
 
 const DiagnosticPage: React.FC = () => {
+  const mapplsKey = getMapplsKey();
+  const geminiKey = import.meta.env.VITE_GEMINI_API_KEY || import.meta.env.GEMINI_API_KEY;
+
   const envVars = {
-    VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
+    VITE_SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL || '❌ Missing',
     VITE_SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY ? '✅ Present' : '❌ Missing',
-    VITE_GOOGLE_MAPS_API_KEY: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '❌ Missing',
-    VITE_AUTHORITY_ACCESS_CODE: import.meta.env.VITE_AUTHORITY_ACCESS_CODE ? '✅ Present' : '❌ Missing',
-    VITE_GOOGLE_VISION_API_KEY: import.meta.env.VITE_GOOGLE_VISION_API_KEY ? '✅ Present' : '❌ Missing',
+    VITE_MAPPLS_KEY: mapplsKey ? `✅ Present (${mapplsKey.slice(0, 6)}...${mapplsKey.slice(-4)})` : '❌ Missing',
+    VITE_GEMINI_API_KEY: geminiKey ? '✅ Present' : '❌ Missing',
+    VITE_AUTHORITY_ACCESS_CODE: import.meta.env.VITE_AUTHORITY_ACCESS_CODE ? '✅ Present' : '❌ Missing (defaults to system fallback)',
   };
 
   return (
@@ -29,38 +33,28 @@ const DiagnosticPage: React.FC = () => {
         </div>
 
         <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-6 mb-6">
-          <h2 className="text-xl font-semibold mb-4">Instructions</h2>
-          <ol className="list-decimal list-inside space-y-2">
-            <li>If any variable shows "❌ Missing", check your <code className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">.env.local</code> file</li>
-            <li>After updating <code className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">.env.local</code>, you MUST restart the dev server</li>
-            <li>Press Ctrl+C (or Cmd+C) to stop the server</li>
-            <li>Run <code className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">npm run dev</code> again</li>
-            <li>Refresh this page to see updated values</li>
+          <h2 className="text-xl font-semibold mb-4">Configuration Instructions</h2>
+          <ol className="list-decimal list-inside space-y-2 text-sm text-slate-700 dark:text-slate-300">
+            <li>Your active configuration is read from <code className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">.env.local</code> and <code className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">.env</code></li>
+            <li>MapMyIndia (Mappls) Key: <code className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">VITE_MAPPLS_KEY</code></li>
+            <li>AI Vision Key: <code className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">VITE_GEMINI_API_KEY</code></li>
+            <li>After modifying environment files, restart your Vite dev server (<code className="bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">npm run dev</code>)</li>
           </ol>
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-6">
-          <h2 className="text-xl font-semibold mb-4">Google Maps API Test</h2>
+          <h2 className="text-xl font-semibold mb-4">MapMyIndia (Mappls) Integration Test</h2>
           <div className="space-y-4">
             <div>
-              <p className="mb-2">API Key Status:</p>
-              <code className="block bg-gray-100 dark:bg-gray-700 p-3 rounded">
-                {import.meta.env.VITE_GOOGLE_MAPS_API_KEY || 'NOT FOUND - Restart dev server!'}
+              <p className="mb-2 text-sm text-slate-600 dark:text-slate-400">Active Mappls Key:</p>
+              <code className="block bg-gray-100 dark:bg-gray-700 p-3 rounded text-sm font-mono">
+                {mapplsKey || 'NOT FOUND - Set VITE_MAPPLS_KEY in .env'}
               </code>
             </div>
             
-            {import.meta.env.VITE_GOOGLE_MAPS_API_KEY && (
-              <div>
-                <p className="text-green-600 font-semibold">✅ API Key is loaded!</p>
-                <p className="text-sm text-gray-600 dark:text-gray-400 mt-2">
-                  If the map still doesn't work, the API key might need:
-                </p>
-                <ul className="list-disc list-inside text-sm text-gray-600 dark:text-gray-400 mt-2 space-y-1">
-                  <li>Billing enabled in Google Cloud Console</li>
-                  <li>Maps JavaScript API enabled</li>
-                  <li>Geocoding API enabled</li>
-                  <li>Places API enabled</li>
-                </ul>
+            {mapplsKey && (
+              <div className="text-sm text-green-700 dark:text-green-400 font-medium">
+                ✅ MapMyIndia Key configured! Maps, reverse geocoding, search, and navigation are active.
               </div>
             )}
           </div>
