@@ -100,8 +100,8 @@ const RoleProtectedRoute = ({
     return <Navigate to={fallbackUrl} replace />;
   }
 
-  const role = userProfile?.role || currentUser?.role || '';
-  if (!role || !allowedRoles.includes(role)) {
+  const role = userProfile?.role || currentUser?.role || 'citizen';
+  if (!allowedRoles.includes(role)) {
     return <Navigate to={getDashboardRouteForRole(role)} replace />;
   }
 
@@ -119,7 +119,7 @@ const HomeRoute = () => {
   
   // If logged in and not a new user, redirect to role-specific dashboard
   if (currentUser && !isNewUser) {
-    const role = userProfile?.role || currentUser?.role || '';
+    const role = userProfile?.role || currentUser?.role || 'citizen';
     return <Navigate to={getDashboardRouteForRole(role)} replace />;
   }
   
@@ -192,9 +192,9 @@ const AppRoutes = () => {
         <Route path="/home" element={<SafeRoute><HomeRoute /></SafeRoute>} />
         <Route path="/dashboard" element={
           <SafeRoute>
-            <RoleProtectedRoute allowedRoles={['citizen', 'community_member']}>
+            <ProtectedRoute>
               <UserHomepage />
-            </RoleProtectedRoute>
+            </ProtectedRoute>
           </SafeRoute>
         } />
         <Route path="/issues" element={<SafeRoute><Issues /></SafeRoute>} />

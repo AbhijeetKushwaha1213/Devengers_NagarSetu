@@ -395,10 +395,14 @@ export default function ReportIssuePage() {
       setImageFiles([]);
       setProcessedImageUrls([]);
 
-      // Redirect to issues page after 2 seconds
+      // Redirect to citizen dashboard or newly reported issue after 1.5 seconds
       setTimeout(() => {
-        navigate('/issues');
-      }, 2000);
+        if (createdIssue?.id) {
+          navigate(`/issues/${createdIssue.id}`);
+        } else {
+          navigate('/dashboard');
+        }
+      }, 1500);
 
     } catch (error) {
       console.error("Error submitting issue:", error);
